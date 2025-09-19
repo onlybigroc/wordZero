@@ -1,6 +1,6 @@
 module benchmark
 
-go 1.19
+go 1.24
 
 replace github.com/ZeroHawkeye/wordZero => ../../
 
