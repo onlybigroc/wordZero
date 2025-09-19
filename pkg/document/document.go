@@ -456,6 +456,88 @@ func Open(filename string) (*Document, error) {
 	return doc, nil
 }
 
+// OpenReader 从 io.Reader 打开一个现有的Word文档
+//
+// 参数 r 是实现了 io.Reader 接口的数据源
+// 该函数会解析整个文档结构，包括文本内容、格式和属性
+//
+// 如果数据源格式错误或解析失败，会返回相应的错误
+//
+// 示例:
+//
+//	file, _ := os.Open("example.docx")
+//	doc, err := document.OpenReader(file)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+func OpenReader(r io.Reader) (*Document, error) {
+	Infof("正在从 io.Reader 打开文档")
+
+	// 读取所有数据到内存以便使用 zip.NewReader
+	data, err := io.ReadAll(r)
+	if err != nil {
+		Errorf("无法读取数据源")
+		return nil, WrapErrorWithContext("read_data", err, "io.Reader")
+	}
+
+	// 创建 bytes.Reader 以支持多次读取
+	readerAt := bytes.NewReader(data)
+
+	// 创建 zip.Reader
+	zipReader, err := zip.NewReader(readerAt, int64(readerAt.Len()))
+	if err != nil {
+		Errorf("无法创建ZIP读取器")
+		return nil, WrapErrorWithContext("create_zip_reader", err, "io.Reader")
+	}
+
+	doc := &Document{
+		parts: make(map[string][]byte),
+		documentRelationships: &Relationships{
+			Xmlns:         "http://schemas.openxmlformats.org/package/2006/relationships",
+			Relationships: []Relationship{},
+		},
+		nextImageID: 1, // 初始化图片ID计数器
+	}
+
+	// 读取所有文件部件
+	for _, file := range zipReader.File {
+		rc, err := file.Open()
+		if err != nil {
+			Errorf("无法打开文件部件: %s", file.Name)
+			return nil, WrapErrorWithContext("open_part", err, file.Name)
+		}
+
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			Errorf("无法读取文件部件: %s", file.Name)
+			return nil, WrapErrorWithContext("read_part", err, file.Name)
+		}
+
+		doc.parts[file.Name] = data
+		Debugf("已读取文件部件: %s (%d 字节)", file.Name, len(data))
+	}
+
+	// 初始化样式管理器
+	doc.styleManager = style.NewStyleManager()
+
+	// 解析主文档
+	if err = doc.parseDocument(); err != nil {
+		Errorf("解析文档失败")
+		return nil, WrapErrorWithContext("parse_document", err, "io.Reader")
+	}
+
+	// 解析样式文件
+	if err = doc.parseStyles(); err != nil {
+		Debugf("解析样式失败，使用默认样式: %v", err)
+		// 如果样式解析失败，重新初始化为默认样式
+		doc.styleManager = style.NewStyleManager()
+	}
+
+	Infof("成功从 io.Reader 打开文档")
+	return doc, nil
+}
+
 // Save 将文档保存到指定的文件路径。
 //
 // 参数 filename 是保存文件的路径，包含文件名和扩展名。
